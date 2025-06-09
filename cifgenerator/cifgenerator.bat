@@ -8,7 +8,7 @@ echo 3. Orthorhombic
 echo 4. Hexagonal
 echo 5. Monoclinic
 echo 6. Triclinic
-set /p lattice_choice="Enter your choice (1¨C6): "
+set /p lattice_choice="Enter your choice (1Â¨C6): "
 
 :: Default values
 set a=20.0
@@ -39,7 +39,7 @@ if "%lattice_choice%"=="1" (
     set /p a="Enter a: "
     set /p b="Enter b: "
     set /p c="Enter c: "
-    set /p beta="Enter angle beta (¡Ù90): "
+    set /p beta="Enter angle beta (Â¡Ã™90): "
 ) else if "%lattice_choice%"=="6" (
     set /p a="Enter a: "
     set /p b="Enter b: "
