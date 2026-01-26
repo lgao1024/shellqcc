@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# version 0.1-260109-3
+# version 0.1-260109-4
 ASE_PATH="ase"
 CIF2CELL_PATH="cif2cell"
 CIF2CELL_IN="cif2cell.in"
