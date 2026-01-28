@@ -1,0 +1,9 @@
+%maxcore 5120
+%pal nprocs 24 end
+! Opt Freq PBE0 def2-SVP CPCM(Water) SlowConv DefGrid3 TightSCF MiniPrint
+
+%geom
+   MaxIter 1024
+end
+
+* XYZFILE 0 1

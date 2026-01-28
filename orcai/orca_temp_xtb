@@ -1,0 +1,9 @@
+%maxcore 1024
+%pal nprocs 4 end
+! Opt XTB SlowConv DefGrid3 TightSCF MiniPrint
+
+%geom
+   MaxIter 1024
+end
+
+* XYZFILE 0 1
