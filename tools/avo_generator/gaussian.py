@@ -1,6 +1,6 @@
 """
 /*****************************************************************************
-  This source file is part of the Avogadro project. Version 251027
+  This source file is part of the Avogadro project. Version 260212
 
   This source code is released under the New BSD License, (the "License").
 
@@ -14,8 +14,8 @@ import sys
 
 TARGET_NAME = "Gaussian"
 DEBUG = False
-WARNINGS = []
 
+# Option type schema for the primary tab.
 OPTION_TYPES = {
   "Title": "string",
   "Calculation Type": "stringList",
@@ -27,6 +27,7 @@ OPTION_TYPES = {
   "Charge": "integer",
 }
 
+# UI calculation labels mapped to Gaussian route fragments.
 CALC_TYPE = {
   "Single Point": " SP",
   "Equilibrium Geometry": " Opt Freq",
@@ -70,46 +71,40 @@ BASES = [
 ]
 
 
-def getOptions():
+def _build_standard_options():
+  """Build the primary Gaussian option tab."""
+  # Start from the shared option type map and then assign defaults/ranges.
   user_options = {option: {"type": kind} for option, kind in OPTION_TYPES.items()}
   user_options["tabName"] = "Standard"
-  user_options["Title"]["default"] = ""
 
-  user_options["Calculation Type"]["default"] = 1
-  user_options["Calculation Type"]["values"] = list(CALC_TYPE)
+  # Hidden title is still kept in the input as a comment header line.
+  user_options["Title"].update({"default": "", "hide": False})
 
-  user_options["Theory"]["default"] = 1
-  user_options["Theory"]["values"] = THEORIES
+  # Calculation route base.
+  user_options["Calculation Type"].update({"default": 1, "values": list(CALC_TYPE)})
 
-  user_options["Basis"]["default"] = 6
-  user_options["Basis"]["values"] = BASES
+  # Electronic structure choices.
+  user_options["Theory"].update({"default": 1, "values": THEORIES})
+  user_options["Basis"].update({"default": 6, "values": BASES})
 
-  user_options["Filename Base"] = {
-    "type": "string",
-    "default": "job",
-  }
+  # Runtime and file naming controls.
+  user_options["Filename Base"] = {"type": "string", "default": "gaussian"}
+  user_options["Processor Cores"].update({"default": 24, "minimum": 1})
+  user_options["Memory"].update({"default": 240, "minimum": 1, "maximum": 9999})
 
-  user_options["Processor Cores"]["default"] = 24
-  user_options["Processor Cores"]["minimum"] = 1
+  # Spin/charge controls.
+  user_options["Multiplicity"].update({"default": 1, "minimum": 1, "maximum": 5})
+  user_options["Charge"].update({"default": 0, "minimum": -9, "maximum": 9})
 
-  user_options["Memory"]["default"] = 240
-  user_options["Memory"]["minimum"] = 1
-  user_options["Memory"]["maximum"] = 9999
+  # Free-form route suffix entered by users.
+  user_options["Keywords"] = {"type": "string", "default": "scf=(xqc, maxcycle=1024)"}
 
-  user_options["Multiplicity"]["default"] = 1
-  user_options["Multiplicity"]["minimum"] = 1
-  user_options["Multiplicity"]["maximum"] = 5
+  return user_options
 
-  user_options["Charge"]["default"] = 0
-  user_options["Charge"]["minimum"] = -9
-  user_options["Charge"]["maximum"] = 9
 
-  user_options["Keywords"] = {
-    "type": "string",
-    "default": "scf=(xqc, maxcycle=1024)",
-  }
-
-  alt_options = {
+def _build_alternate_options():
+  """Build the secondary tab with override and environment options."""
+  return {
     "tabName": "Alternate",
     "Alternate Theory": {
       "type": "string",
@@ -167,70 +162,121 @@ def getOptions():
     },
   }
 
-  return {"userOptions": [user_options, alt_options], "highlightStyles": _get_highlight_styles()}
+
+def getOptions():
+  """Return Avogadro option schema for Gaussian input generation."""
+  standard_options = _build_standard_options()
+  alternate_options = _build_alternate_options()
+
+  return {
+    "userOptions": [standard_options, alternate_options],
+    "highlightStyles": _get_highlight_styles(),
+  }
 
 
 def _build_solvation(solvation_type, solvent):
+  """Build the Gaussian SCRF route fragment from solvent settings."""
+  # "None (gas)" means explicit gas-phase calculation.
   if "None" in solvent:
     return ""
+
   if solvation_type == "IEFPCM":
     return f" scrf=(IEFPCM, solvent={solvent})"
+
   if solvation_type == "SMD":
     return f" scrf=(SMD, solvent={solvent})"
+
   return ""
 
 
-def _build_theory_basis(theory, basis):
+def _build_theory_basis(theory, basis, warnings):
+  """Build theory/basis route head and collect compatibility warnings."""
+  # Semi-empirical methods do not take an explicit basis keyword in Gaussian.
   if theory in ("AM1", "PM3"):
-    WARNINGS.append("Ignoring basis set for semi-empirical calculation.")
+    warnings.append("Ignoring basis set for semi-empirical calculation.")
     return f"#p {theory}"
-  return f"#p {theory}/{basis.replace(' ', '')}"
+
+  basis_clean = str(basis).replace(" ", "")
+  return f"#p {theory}/{basis_clean}"
 
 
-def generateInputFile(opts):
-  title = opts["Title"]
-  calculate = opts["Calculation Type"]
+def _build_output_format_suffix(output_format):
+  """Map output format selection to extra Gaussian route keywords."""
+  if output_format == "Standard":
+    return ""
+
+  if output_format == "Molden":
+    return " gfprint pop=full"
+
+  if output_format == "Molekel":
+    return " gfoldprint pop=full"
+
+  raise ValueError(f"Invalid output format: {output_format}")
+
+
+def _resolve_theory_and_basis(opts):
+  """Resolve alternate overrides for theory and basis when provided."""
+  # Alternate values are free-form overrides and take precedence.
   theory = opts["Alternate Theory"] or opts["Theory"]
   basis = opts["Alternate Basis Set"] or opts["Basis"]
-  multiplicity = opts["Multiplicity"]
-  charge = opts["Charge"]
-  output_format = opts["Output Format"]
-  checkpoint = opts["Write Checkpoint File"]
-  n_cores = opts["Processor Cores"]
-  memory_gb = opts["Memory"]
-  keywords = opts["Keywords"]
+  return theory, basis
+
+
+def _build_route_line(opts, warnings):
+  """Compose a complete Gaussian route line from all route-affecting options."""
+  calculate = opts["Calculation Type"]
+  theory, basis = _resolve_theory_and_basis(opts)
+
+  route = _build_theory_basis(theory, basis, warnings)
+
+  # Optional empirical dispersion term.
   dispersion = opts["Dispersion Correction"]
-  solvation_type = opts["Solvation Type"]
-  solvent = opts["Solvation"]
-
-  lines = [
-    f"%NProcShared={n_cores}",
-    f"%mem={memory_gb}GB",
-  ]
-
-  if checkpoint:
-    lines.append(f"%Chk={opts['Filename Base']}.chk")
-
-  route = _build_theory_basis(theory, basis)
   if dispersion in ("GD3BJ", "GD3"):
     route += f" em={dispersion}"
 
-  route += _build_solvation(solvation_type, solvent)
+  # Optional solvent model term.
+  route += _build_solvation(opts["Solvation Type"], opts["Solvation"])
 
+  # Mandatory run type fragment.
   try:
     route += CALC_TYPE[calculate]
   except KeyError as exc:
     raise ValueError(f"Invalid calculation type: {calculate}") from exc
 
-  if output_format == "Molden":
-    route += " gfprint pop=full"
-  elif output_format == "Molekel":
-    route += " gfoldprint pop=full"
-  elif output_format != "Standard":
-    raise ValueError(f"Invalid output format: {output_format}")
+  # Optional output format modifiers.
+  route += _build_output_format_suffix(opts["Output Format"])
 
-  route += f" {keywords}"
+  # User-provided additional keywords are appended last.
+  keywords = str(opts["Keywords"]).strip()
+  if keywords:
+    route += f" {keywords}"
 
+  return route
+
+
+def generateInputFile(opts, warnings=None):
+  """Generate Gaussian input text from options and return it as a string."""
+  warnings = [] if warnings is None else warnings
+
+  title = opts["Title"]
+  multiplicity = opts["Multiplicity"]
+  charge = opts["Charge"]
+  n_cores = opts["Processor Cores"]
+  memory_gb = opts["Memory"]
+
+  # Header directives controlling resources and checkpoint IO.
+  lines = [
+    f"%NProcShared={n_cores}",
+    f"%mem={memory_gb}GB",
+  ]
+
+  if opts["Write Checkpoint File"]:
+    lines.append(f"%Chk={opts['Filename Base']}.chk")
+
+  # Main route line.
+  route = _build_route_line(opts, warnings)
+
+  # Geometry/title/body section.
   lines.extend([
     route,
     "",
@@ -246,11 +292,12 @@ def generateInputFile(opts):
 
 
 def generateInput():
+  """Avogadro plugin entry: parse payload and return generated Gaussian files."""
   stdin_str = sys.stdin.read()
   payload = json.loads(stdin_str)
 
-  WARNINGS.clear()
-  inp = generateInputFile(payload["options"])
+  warnings = []
+  inp = generateInputFile(payload["options"], warnings=warnings)
   base_name = payload["options"]["Filename Base"]
 
   result = {
@@ -261,35 +308,41 @@ def generateInput():
   if DEBUG:
     result["files"].append({"filename": "debug_info", "contents": stdin_str})
 
-  if WARNINGS:
-    result["warnings"] = WARNINGS
+  if warnings:
+    result["warnings"] = warnings
 
   return result
 
 
 def _get_highlight_styles():
+  """Define highlight rules for generated Gaussian input text."""
   rules = []
 
+  # Link0 directives.
   rules.append({
     "patterns": [{"regexp": "^%[A-Za-z_][A-Za-z0-9_]*"}],
     "format": {"preset": "title"},
   })
 
+  # Link0 assigned values.
   rules.append({
     "patterns": [{"regexp": "^%[A-Za-z_][A-Za-z0-9_]*=([^\\n]+)$"}],
     "format": {"preset": "property"},
   })
 
+  # Route line.
   rules.append({
     "patterns": [{"regexp": "^#.*$"}],
     "format": {"preset": "keyword"},
   })
 
+  # Pipe-style inline comments/diagnostics.
   rules.append({
     "patterns": [{"regexp": "^\\s+[^\\n]*\\|[^\\n]*$"}],
     "format": {"preset": "comment"},
   })
 
+  # Numeric literals.
   rules.append({
     "patterns": [{"regexp": "\\b[+-]?[.0-9]+(?:[eEdD][+-]?[.0-9]+)?\\b"}],
     "format": {"preset": "literal"},
@@ -299,6 +352,7 @@ def _get_highlight_styles():
 
 
 if __name__ == "__main__":
+  """CLI shim for Avogadro plugin protocol and local debugging."""
   parser = argparse.ArgumentParser(f"Generate a {TARGET_NAME} input file.")
   parser.add_argument("--debug", action="store_true")
   parser.add_argument("--print-options", action="store_true")
@@ -309,6 +363,7 @@ if __name__ == "__main__":
 
   DEBUG = args["debug"]
 
+  # Dispatch selected command.
   if args["display_name"]:
     print(TARGET_NAME)
   if args["print_options"]:

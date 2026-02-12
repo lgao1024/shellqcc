@@ -1,6 +1,6 @@
 """
 /*****************************************************************************
-  This source file is part of the Avogadro project. Version 251027
+  This source file is part of the Avogadro project. Version 260212
 
   This source code is released under the New BSD License, (the "License").
 ******************************************************************************/
@@ -16,6 +16,8 @@ DEBUG = False
 
 
 def getOptions():
+  """Return Avogadro option schema for ORCA input generation."""
+  # Basic tab: core electronic structure setup.
   user_options = {
     "tabName": "Basic",
     "Title": {
@@ -147,7 +149,7 @@ def getOptions():
     },
     "Filename Base": {
       "type": "string",
-      "default": "job",
+      "default": "orca",
     },
     "Charge": {
       "type": "integer",
@@ -173,6 +175,7 @@ def getOptions():
     },
   }
 
+  # Dynamics tab: AIMD-specific controls.
   aimd_options = {
     "tabName": "Dynamics",
     "AIMD TimeStep": {
@@ -226,6 +229,7 @@ def getOptions():
 
 
 def _resolve_calc_mode(calculation_type):
+  """Map UI calculation label to ORCA route keyword and geometry-control flag."""
   mapping = {
     "Single Point": ("SP", False),
     "Geometry Optimization": ("Opt", True),
@@ -242,6 +246,8 @@ def _resolve_calc_mode(calculation_type):
 
 
 def _resolve_solvation(solvent, solvation_model):
+  """Resolve solvent/solvation model settings into ORCA route fragments."""
+  # Explicit gas-phase selection disables solvent keyword.
   if "None" in solvent:
     return ""
   if solvation_model == "CPCM":
@@ -252,6 +258,8 @@ def _resolve_solvation(solvent, solvation_model):
 
 
 def _resolve_basis_with_aux(ri, basis):
+  """Resolve RI keyword and required auxiliary basis for the selected main basis."""
+  # RIJ-like approximations use Coulomb-fitting auxiliary basis sets.
   rij_basis = {
     "6-31G(d)": "AutoAux",
     "6-311G(d,p)": "AutoAux",
@@ -272,6 +280,7 @@ def _resolve_basis_with_aux(ri, basis):
     "ma-def2-QZVPP": "AutoAux",
   }
 
+  # RIJK-like approximations require JK auxiliary basis sets.
   rijk_basis = {
     "6-31G(d)": "AutoAux",
     "6-311G(d,p)": "AutoAux",
@@ -292,11 +301,14 @@ def _resolve_basis_with_aux(ri, basis):
     "ma-def2-QZVPP": "aug-cc-pVQZ/JK",
   }
 
+  # No RI approximation: keep original basis only.
   if ri == "None":
     return "", basis
+  # Explicit NORI still adds a route token but no aux basis suffix.
   if ri == "NORI":
     return " NORI", basis
 
+  # Choose auxiliary basis family by RI method class.
   if ri in ("RIJONX", "RIJCOSX"):
     aux_basis = rij_basis[basis]
   else:
@@ -306,23 +318,28 @@ def _resolve_basis_with_aux(ri, basis):
 
 
 def _build_orca_code(opts, calc_str):
+  """Build the ORCA route line from theory/basis/RI/dispersion/solvation options."""
   theory = opts["Theory"]
   basis = opts["Basis"]
   addopts = opts["Keywords"]
   dispersion = opts["Dispersion Correction"]
   ri = opts["RI Approximation"]
 
+  # Resolve RI and possibly append auxiliary basis info.
   ri_str, basis = _resolve_basis_with_aux(ri, basis)
   dispersion_str = "" if dispersion == "None" else f" {dispersion}"
 
+  # Composite methods already bundle basis/dispersion choices.
   if "-3c" in theory or "-3C" in theory or "XTB" in theory:
     code = f"{calc_str} {theory}{ri_str}"
   else:
     code = f"{calc_str} {theory}{dispersion_str}{ri_str} {basis}"
 
+  # Solvation keyword is appended when a solvent is selected.
   solvation = _resolve_solvation(opts["Solvent"], opts["Solvation Model"])
   if solvation:
     code = f"{code} {solvation}"
+  # Keep user-entered free-form options at the end.
   if addopts:
     code = f"{code} {addopts}"
 
@@ -330,11 +347,13 @@ def _build_orca_code(opts, calc_str):
 
 
 def _append_md_block(lines, opts):
+  """Append ORCA %md block from AIMD options."""
   lines.extend([
     "%md",
     f"   Timestep {opts['AIMD TimeStep']}",
   ])
 
+  # Restart mode changes how initial velocity is handled.
   restart_mode = str(opts["AIMD Restart"])
   init_vel = opts["AIMD Initvel"]
   if restart_mode != "Not Restart":
@@ -342,12 +361,14 @@ def _append_md_block(lines, opts):
   else:
     lines.append(f"   Initvel {init_vel}_K")
 
+  # Thermostat control line.
   lines.append(
     "   Thermostat "
     + f"{opts['AIMD Thermostat Type']} "
     + f"{opts['AIMD Thermostat Temp']}_K Timecon {opts['AIMD Thermostat Time']}"
   )
 
+  # Optional trajectory dumps.
   traj = str(opts["AIMD Output Trajectory"])
   if traj != "None":
     lines.append('   Dump Position Stride 1 Filename "position.xyz"')
@@ -358,6 +379,7 @@ def _append_md_block(lines, opts):
         lines.append('   Dump GBW Stride 10 Filename "wfc"')
         lines.append('   Dump EnGrad Stride 10 Filename "EnGrad"')
 
+  # Restart directives are emitted at the end of the block.
   if restart_mode != "Not Restart":
     lines.append(f"   {restart_mode}")
 
@@ -369,6 +391,7 @@ def _append_md_block(lines, opts):
 
 
 def _append_geom_constraints(lines, cjson):
+  """Append %geom constraint entries from cjson constraints/frozen atom data."""
   has_constraints = "constraints" in cjson
   has_frozen = "atoms" in cjson and "frozen" in cjson["atoms"]
   if not has_constraints and not has_frozen:
@@ -376,6 +399,7 @@ def _append_geom_constraints(lines, cjson):
 
   lines.append("   Constraints")
 
+  # Distance/angle/dihedral constraints.
   if has_constraints:
     for constraint in cjson["constraints"]:
       if len(constraint) == 3:
@@ -388,6 +412,9 @@ def _append_geom_constraints(lines, cjson):
         value, atom1, atom2, atom3, atom4 = constraint
         lines.append(f"      {{ D {atom1} {atom2} {atom3} {atom4} {value:.6f} C }}")
 
+  # Frozen atom modes:
+  # - length == atom_count: freeze whole atoms
+  # - length == 3*atom_count: freeze x/y/z selectively
   if has_frozen:
     frozen = cjson["atoms"]["frozen"]
     atom_count = len(cjson["atoms"]["elements"]["number"])
@@ -409,8 +436,10 @@ def _append_geom_constraints(lines, cjson):
 
 
 def _append_geom_block(lines, calculate, cjson):
+  """Append ORCA %geom control block including optional constraints."""
   lines.append("%geom")
   _append_geom_constraints(lines, cjson)
+  # Transition-state optimization benefits from periodic Hessian refresh.
   if calculate == "Transition State":
     lines.append("   ReCalc_Hess 100")
   lines.extend([
@@ -421,24 +450,30 @@ def _append_geom_block(lines, calculate, cjson):
 
 
 def generateInputFile(opts, cjson):
+  """Generate ORCA input text from options + cjson molecular data."""
   title = opts["Title"]
   calculate = opts["Calculation Type"]
   charge = opts["Charge"]
   multiplicity = opts["Multiplicity"]
+  # Convert total memory (GB) into ORCA's per-core MB setting.
   n_cores = int(opts["Processor Cores"])
   memory = int((opts["Memory"] * 1024) / n_cores)
 
+  # Resolve route keyword and whether geometry-control block is needed.
   calc_str, geomcontrol = _resolve_calc_mode(calculate)
   code = _build_orca_code(opts, calc_str)
 
+  # Header and core runtime controls.
   lines = [
     f"# {title}",
     f"%maxcore {memory}",
   ]
 
+  # Enable parallel block only when more than one core is requested.
   if n_cores > 1:
     lines.append(f"%pal nprocs {n_cores} end")
 
+  # Geometry jobs use MiniPrint, SP jobs keep explicit orbital/basis prints.
   if geomcontrol:
     lines.append(f"! {code} MiniPrint")
   else:
@@ -450,6 +485,7 @@ def generateInputFile(opts, cjson):
 
   lines.append("")
 
+  # SMD requires an explicit %cpcm block with smd=true.
   if "None" not in opts["Solvent"] and opts["Solvation Model"] == "SMD":
     lines.extend([
       "%cpcm",
@@ -459,6 +495,7 @@ def generateInputFile(opts, cjson):
       "",
     ])
 
+  # Optional TDDFT excited-state setup.
   if opts["Excitation States"]:
     lines.extend([
       "%tddft",
@@ -469,12 +506,15 @@ def generateInputFile(opts, cjson):
       "",
     ])
 
+  # Optional MD control block.
   if calc_str == "MD":
     _append_md_block(lines, opts)
 
+  # Optional geometry control block.
   if geomcontrol:
     _append_geom_block(lines, calculate, cjson)
 
+  # Optional NEB control.
   if calculate == "Transition State (NEB method)":
     lines.extend([
       "%neb",
@@ -483,6 +523,7 @@ def generateInputFile(opts, cjson):
       "",
     ])
 
+  # Optional IRC control.
   if calculate == "Intrinsic Reaction Coordinate":
     lines.extend([
       "%irc",
@@ -494,6 +535,7 @@ def generateInputFile(opts, cjson):
       "",
     ])
 
+  # Coordinate body in xyz format expected by ORCA.
   lines.extend([
     f"* xyz {charge} {multiplicity}",
     "$$coords:___Sxyz$$",
@@ -506,12 +548,14 @@ def generateInputFile(opts, cjson):
 
 
 def generateInput():
+  """Avogadro plugin entry: parse payload and return ORCA input files."""
   stdin_str = sys.stdin.read()
   payload = json.loads(stdin_str)
 
   inp = generateInputFile(payload["options"], payload["cjson"])
   base_name = payload["options"]["Filename Base"]
 
+  # Output file follows <Filename Base>.inp convention.
   files = [{"filename": f"{base_name}.inp", "contents": inp, "highlightStyles": ["orca-default"]}]
   if DEBUG:
     files.append({"filename": "debug_info", "contents": stdin_str})
@@ -523,6 +567,7 @@ def generateInput():
 
 
 def _get_highlight_styles():
+  """Define highlight rules for ORCA input preview."""
   rules = []
 
   rules.append({
@@ -572,6 +617,7 @@ def _get_highlight_styles():
 
 
 if __name__ == "__main__":
+  """CLI shim for plugin protocol and local testing."""
   parser = argparse.ArgumentParser(f"Generate a {TARGET_NAME} input file.")
   parser.add_argument("--debug", action="store_true")
   parser.add_argument("--print-options", action="store_true")
@@ -582,6 +628,7 @@ if __name__ == "__main__":
 
   DEBUG = args["debug"]
 
+  # Dispatch selected command.
   if args["display_name"]:
     print(TARGET_NAME)
   if args["print_options"]:

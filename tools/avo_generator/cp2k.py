@@ -86,16 +86,19 @@ VALENCE_ELECTRONS = {
 
 
 def getOptions():
+  """Return Avogadro option schema for CP2K input generation."""
+  # Single basic tab with runtime, method and electronic-structure settings.
   user_options = {
     "tabName": "Basic",
     "Title": {
       "type": "string",
       "default": "",
+      "hide": True,
       "toolTip": "Title of the input file",
     },
     "Filename Base": {
       "type": "string",
-      "default": "job",
+      "default": "cp2k",
     },
     "Charge": {
       "type": "integer",
@@ -128,14 +131,14 @@ def getOptions():
       "minimum": 1,
       "maximum": 999,
     },
-    "Run Type": {
+    "Calculation Type": {
       "type": "stringList",
       "default": 0,
       "values": [
-        "Energy",
-        "Energy and forces",
-        "Geometry Optimization",
-        "Molecular dynamics",
+        "ENERGY",
+        "ENERGY_FORCE",
+        "GEO_OPT",
+        "MOLECULAR_DYNAMICS",
       ],
       "toolTip": "Type of calculation to perform",
     },
@@ -148,7 +151,7 @@ def getOptions():
         "Hybrid quantum classical (Not yet supported)",
       ],
     },
-    "Basis Set": {
+    "Basis": {
       "type": "stringList",
       "default": 2,
       "values": [
@@ -159,7 +162,7 @@ def getOptions():
         "TZV2P-MOLOPT-SR-GTH",
       ],
     },
-    "Functional": {
+    "Theory": {
       "type": "stringList",
       "default": 0,
       "values": [
@@ -180,16 +183,19 @@ def getOptions():
 
 
 def parse_cml(cml):
+  """Parse CML XML text into an ElementTree root node."""
   return ET.fromstring(cml)
 
 
 def parse_atoms(cml, vectors=None):
+  """Parse atom coordinates from CML, accepting Cartesian or fractional positions."""
   root = parse_cml(cml)
   atom_array = root.find(".//{*}atomArray")
   atoms = []
   if atom_array is None:
     return atoms
 
+  # Iterate each atom and prefer explicit Cartesian coordinates when present.
   for atom in atom_array.findall("{*}atom"):
     element = atom.get("elementType")
     x = atom.get("x3")
@@ -203,6 +209,7 @@ def parse_atoms(cml, vectors=None):
       atoms.append((element, float(x), float(y), float(z)))
       continue
 
+    # Fallback: convert fractional coordinates to Cartesian if vectors are known.
     fx = atom.get("xFract")
     fy = atom.get("yFract")
     fz = atom.get("zFract")
@@ -214,6 +221,7 @@ def parse_atoms(cml, vectors=None):
 
 
 def generateElements(cml, unique=0):
+  """Collect element symbols from CML (ordered list or unique set)."""
   root = parse_cml(cml)
   atom_array = root.find(".//{*}atomArray")
   elements = []
@@ -229,6 +237,7 @@ def generateElements(cml, unique=0):
 
 
 def _read_crystal_scalars(cml):
+  """Read lattice scalar parameters (a,b,c,alpha,beta,gamma) from CML crystal block."""
   root = parse_cml(cml)
   crystal = root.find(".//{*}crystal")
   if crystal is None:
@@ -243,6 +252,7 @@ def _read_crystal_scalars(cml):
     "gamma": None,
   }
 
+  # Parse and convert angular terms to radians for trigonometric formulas.
   for scalar in crystal.findall("{*}scalar"):
     title = scalar.get("title")
     if title not in scalar_values or scalar.text is None:
@@ -253,6 +263,7 @@ def _read_crystal_scalars(cml):
       value = math.radians(value)
     scalar_values[title] = value
 
+  # Require all six scalar values to build a valid cell.
   if any(value is None for value in scalar_values.values()):
     return None
 
@@ -260,6 +271,7 @@ def _read_crystal_scalars(cml):
 
 
 def _lattice_vectors_from_scalars(scalars):
+  """Convert lattice lengths/angles to Cartesian lattice vectors."""
   a = scalars["a"]
   b = scalars["b"]
   c = scalars["c"]
@@ -282,6 +294,7 @@ def _lattice_vectors_from_scalars(scalars):
 
 
 def generateCellVectors(cml):
+  """Return periodic cell vectors from CML, or None for non-periodic inputs."""
   scalars = _read_crystal_scalars(cml)
   if scalars is None:
     return None
@@ -289,13 +302,16 @@ def generateCellVectors(cml):
 
 
 def generateMolecularCell(cml, vacuum_padding=10.0, min_size=12.0):
+  """Build a padded orthorhombic box for molecular (non-periodic) systems."""
   root = parse_cml(cml)
   atom_array = root.find(".//{*}atomArray")
+  # Conservative default box when no atom coordinates are available.
   fallback = ([20.0, 0.0, 0.0], [0.0, 20.0, 0.0], [0.0, 0.0, 20.0])
 
   if atom_array is None:
     return fallback
 
+  # Estimate molecule extents from Cartesian coordinates.
   coords = []
   for atom in atom_array.findall("{*}atom"):
     x = atom.get("x3")
@@ -308,6 +324,7 @@ def generateMolecularCell(cml, vacuum_padding=10.0, min_size=12.0):
   if not coords:
     return fallback
 
+  # Apply vacuum padding and minimum size constraints per axis.
   xs, ys, zs = zip(*coords)
   lx = max(max(xs) - min(xs) + vacuum_padding, min_size)
   ly = max(max(ys) - min(ys) + vacuum_padding, min_size)
@@ -317,15 +334,18 @@ def generateMolecularCell(cml, vacuum_padding=10.0, min_size=12.0):
 
 
 def format_vector(vector):
+  """Format a cell vector with CP2K-friendly fixed-width numeric fields."""
   return " ".join(f"{value:12.7f}" for value in vector)
 
 
 def format_atom_line(atom):
+  """Format one atom entry in CP2K &COORD block."""
   element, x, y, z = atom
   return f"      {element:<2s} {x:16.10f} {y:16.10f} {z:16.10f}"
 
 
 def _cross(v1, v2):
+  """3D vector cross product."""
   return [
     v1[1] * v2[2] - v1[2] * v2[1],
     v1[2] * v2[0] - v1[0] * v2[2],
@@ -334,14 +354,17 @@ def _cross(v1, v2):
 
 
 def _dot(v1, v2):
+  """3D vector dot product."""
   return v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2]
 
 
 def _cartesian_to_fractional(cart, vectors, tol):
+  """Convert Cartesian coordinates to fractional coordinates for a general cell."""
   vector_a, vector_b, vector_c = vectors
   b_cross_c = _cross(vector_b, vector_c)
   c_cross_a = _cross(vector_c, vector_a)
   a_cross_b = _cross(vector_a, vector_b)
+  # Cell volume must be non-zero for invertible coordinate transform.
   volume = _dot(vector_a, b_cross_c)
   if abs(volume) < tol:
     raise ValueError("Invalid cell vectors: near-zero cell volume.")
@@ -353,6 +376,7 @@ def _cartesian_to_fractional(cart, vectors, tol):
 
 
 def _fractional_to_cartesian(frac, vectors):
+  """Convert fractional coordinates to Cartesian coordinates."""
   vector_a, vector_b, vector_c = vectors
   fx, fy, fz = frac
   return [
@@ -363,6 +387,7 @@ def _fractional_to_cartesian(frac, vectors):
 
 
 def _wrap_fractional(value, tol):
+  """Wrap fractional coordinate into [0,1), snapping boundary noise to 0."""
   wrapped = value - math.floor(value)
   if wrapped < tol or wrapped > 1.0 - tol:
     return 0.0
@@ -370,9 +395,11 @@ def _wrap_fractional(value, tol):
 
 
 def deduplicate_periodic_atoms(atoms, vectors, tol=FRACTIONAL_TOL):
+  """Remove periodic duplicates using wrapped fractional keys and tolerance bins."""
   unique_atoms = []
   seen = set()
 
+  # Build element+fractional key and keep first occurrence only.
   for element, x, y, z in atoms:
     frac = _cartesian_to_fractional([x, y, z], vectors, tol)
     wrapped = [_wrap_fractional(value, tol) for value in frac]
@@ -385,6 +412,7 @@ def deduplicate_periodic_atoms(atoms, vectors, tol=FRACTIONAL_TOL):
     if key in seen:
       continue
     seen.add(key)
+    # Store wrapped position converted back to Cartesian for output consistency.
     cart = _fractional_to_cartesian(wrapped, vectors)
     unique_atoms.append((element, cart[0], cart[1], cart[2]))
 
@@ -404,6 +432,7 @@ _METALS = {
 
 
 def _sorted_atoms_by_element(atoms):
+  """Sort atoms deterministically: metals first, then element and coordinates."""
   def atom_key(atom):
     element = atom[0]
     metal_group = 0 if element in _METALS else 1
@@ -412,14 +441,20 @@ def _sorted_atoms_by_element(atoms):
   return sorted(atoms, key=atom_key)
 
 
-def _append_global(lines, title, calculate):
+def _append_global(lines, project, calculate):
+  """Append CP2K &GLOBAL block including PROJECT and RUN_TYPE."""
   run_type_map = {
+    "ENERGY": "ENERGY",
+    "ENERGY_FORCE": "ENERGY_FORCE",
+    "GEO_OPT": "GEO_OPT",
+    "MOLECULAR_DYNAMICS": "MOLECULAR_DYNAMICS",
     "Energy": "ENERGY",
     "Energy and forces": "ENERGY_FORCE",
     "Molecular dynamics": "MOLECULAR_DYNAMICS",
     "Geometry Optimization": "GEO_OPT",
   }
 
+  # Support both canonical RUN_TYPE values and legacy UI labels.
   try:
     run_type = run_type_map[calculate]
   except KeyError as exc:
@@ -427,7 +462,7 @@ def _append_global(lines, title, calculate):
 
   lines.extend([
     "&GLOBAL",
-    f"  PROJECT {title} ",
+    f"  PROJECT {project} ",
     f"  RUN_TYPE {run_type}",
     "  PRINT_LEVEL LOW",
     "  ELPA_KERNEL GENERIC_SIMPLE",
@@ -437,6 +472,7 @@ def _append_global(lines, title, calculate):
 
 
 def _append_dft_block(lines, opts, functional, is_periodic_system):
+  """Append CP2K DFT settings under &FORCE_EVAL for electronic-structure runs."""
   lines.extend([
     "  &DFT",
     "    BASIS_SET_FILE_NAME  BASIS_MOLOPT",
@@ -445,6 +481,7 @@ def _append_dft_block(lines, opts, functional, is_periodic_system):
     f"    MULTIPLICITY {opts['Multiplicity']}",
   ])
 
+  # For molecular systems use non-periodic Poisson solver.
   if not is_periodic_system:
     lines.extend([
       "    &POISSON",
@@ -453,6 +490,7 @@ def _append_dft_block(lines, opts, functional, is_periodic_system):
       "    &END POISSON",
     ])
 
+  # SCF, MGRID and XC defaults.
   lines.extend([
     "    &QS",
     "      EPS_DEFAULT 1.0E-10",
@@ -490,9 +528,11 @@ def _append_dft_block(lines, opts, functional, is_periodic_system):
 
 
 def _append_subsys_dft_block(lines, atoms, basis_set, functional, vectors, is_periodic_system):
+  """Append &SUBSYS for DFT runs: KIND definitions, cell and coordinates."""
   vector_a, vector_b, vector_c = vectors
   lines.append("  &SUBSYS")
 
+  # One KIND block per unique element.
   for element in sorted({atom[0] for atom in atoms}):
     if element not in VALENCE_ELECTRONS:
       raise ValueError(f"No valence electron mapping for element: {element}")
@@ -505,6 +545,7 @@ def _append_subsys_dft_block(lines, atoms, basis_set, functional, vectors, is_pe
       "    &END KIND",
     ])
 
+  # Cell and coordinate body.
   lines.extend([
     "    &CELL",
     "      PERIODIC XYZ" if is_periodic_system else "      PERIODIC NONE",
@@ -517,6 +558,7 @@ def _append_subsys_dft_block(lines, atoms, basis_set, functional, vectors, is_pe
   lines.extend([format_atom_line(atom) for atom in atoms])
   lines.append("    &END COORD")
 
+  # Molecular systems are centered explicitly.
   if not is_periodic_system:
     lines.extend([
       "    &TOPOLOGY",
@@ -529,6 +571,7 @@ def _append_subsys_dft_block(lines, atoms, basis_set, functional, vectors, is_pe
 
 
 def _append_mm_block(lines):
+  """Append template MM block for FIST (molecular mechanics) calculations."""
   lines.extend([
     "  &SUBSYS",
     "    &CELL",
@@ -577,12 +620,14 @@ def _append_mm_block(lines):
 
 
 def generateInputFile(cml, opts):
-  title = opts["Title"]
-  calculate = opts["Run Type"]
+  """Generate full CP2K input text from CML and user options."""
+  project = opts["Filename Base"]
+  calculate = opts["Calculation Type"]
   method = opts["Method"]
-  basis_set = opts["Basis Set"]
-  functional = opts["Functional"]
+  basis_set = opts["Basis"]
+  functional = opts["Theory"]
 
+  # Map UI method names to CP2K FORCE_EVAL METHOD values.
   method_map = {
     "Electronic structure methods (DFT)": "QUICKSTEP",
     "Hybrid quantum classical (Not yet supported)": "QMMM",
@@ -593,6 +638,7 @@ def generateInputFile(cml, opts):
   except KeyError as exc:
     raise ValueError(f"Invalid method type: {method}") from exc
 
+  # Build periodic or molecular cell and atom list.
   cell_vectors = generateCellVectors(str(cml))
   is_periodic_system = cell_vectors is not None
   vectors = cell_vectors if is_periodic_system else generateMolecularCell(str(cml))
@@ -601,14 +647,16 @@ def generateInputFile(cml, opts):
     atoms = deduplicate_periodic_atoms(atoms, vectors)
   atoms = _sorted_atoms_by_element(atoms)
 
+  # Compose text block-by-block.
   lines = []
-  _append_global(lines, title, calculate)
+  _append_global(lines, project, calculate)
 
   lines.extend([
     "&FORCE_EVAL",
     f"  METHOD {cp2k_method}",
   ])
 
+  # Add method-specific section content.
   if method == "Electronic structure methods (DFT)":
     _append_dft_block(lines, opts, functional, is_periodic_system)
     _append_subsys_dft_block(lines, atoms, basis_set, functional, vectors, is_periodic_system)
@@ -620,23 +668,28 @@ def generateInputFile(cml, opts):
 
 
 def generateInput():
+  """Avogadro plugin entry: parse payload and return generated CP2K files."""
   stdin_str = sys.stdin.read()
   payload = json.loads(stdin_str)
 
+  # Output naming convention: <Filename Base>.<Calculation Type>.inp
   inp = generateInputFile(payload["cml"], payload["options"])
-  base_name = payload["options"]["Filename Base"]
+  base_name = str(payload["options"]["Filename Base"]).strip() or "cp2k"
+  calculation_type = str(payload["options"]["Calculation Type"]).strip() or "ENERGY"
+  filename = f"{base_name}.{calculation_type}.inp"
 
-  files = [{"filename": f"{base_name}.inp", "contents": inp, "highlightStyles": ["cp2k-default"]}]
+  files = [{"filename": filename, "contents": inp, "highlightStyles": ["cp2k-default"]}]
   if DEBUG:
     files.append({"filename": "debug_info", "contents": stdin_str})
 
   return {
     "files": files,
-    "mainFile": f"{base_name}.inp",
+    "mainFile": filename,
   }
 
 
 def _get_highlight_styles():
+  """Define highlight rules for CP2K input preview."""
   rules = []
 
   rules.append({
@@ -671,6 +724,7 @@ def _get_highlight_styles():
 
 
 if __name__ == "__main__":
+  """CLI shim for plugin protocol and local debugging."""
   parser = argparse.ArgumentParser(f"Generate a {TARGET_NAME} input file.")
   parser.add_argument("--debug", action="store_true")
   parser.add_argument("--print-options", action="store_true")
@@ -681,6 +735,7 @@ if __name__ == "__main__":
 
   DEBUG = args["debug"]
 
+  # Dispatch selected command.
   if args["display_name"]:
     print(TARGET_NAME)
   if args["print_options"]:
