@@ -175,6 +175,7 @@ def getOptions():
   return {
     "userOptions": user_options,
     "inputMoleculeFormat": "cml",
+    "highlightStyles": _get_highlight_styles(),
   }
 
 
@@ -390,6 +391,27 @@ def deduplicate_periodic_atoms(atoms, vectors, tol=FRACTIONAL_TOL):
   return unique_atoms
 
 
+_METALS = {
+  "Li", "Be", "Na", "Mg", "Al", "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe",
+  "Co", "Ni", "Cu", "Zn", "Ga", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru",
+  "Rh", "Pd", "Ag", "Cd", "In", "Sn", "Cs", "Ba", "La", "Ce", "Pr", "Nd",
+  "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu", "Hf",
+  "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po",
+  "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf",
+  "Es", "Fm", "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds",
+  "Rg", "Cn", "Nh", "Fl", "Mc", "Lv",
+}
+
+
+def _sorted_atoms_by_element(atoms):
+  def atom_key(atom):
+    element = atom[0]
+    metal_group = 0 if element in _METALS else 1
+    return (metal_group, element, atom[1], atom[2], atom[3])
+
+  return sorted(atoms, key=atom_key)
+
+
 def _append_global(lines, title, calculate):
   run_type_map = {
     "Energy": "ENERGY",
@@ -577,6 +599,7 @@ def generateInputFile(cml, opts):
   atoms = parse_atoms(str(cml), vectors=vectors)
   if is_periodic_system:
     atoms = deduplicate_periodic_atoms(atoms, vectors)
+  atoms = _sorted_atoms_by_element(atoms)
 
   lines = []
   _append_global(lines, title, calculate)
@@ -603,7 +626,7 @@ def generateInput():
   inp = generateInputFile(payload["cml"], payload["options"])
   base_name = payload["options"]["Filename Base"]
 
-  files = [{"filename": f"{base_name}.inp", "contents": inp}]
+  files = [{"filename": f"{base_name}.inp", "contents": inp, "highlightStyles": ["cp2k-default"]}]
   if DEBUG:
     files.append({"filename": "debug_info", "contents": stdin_str})
 
@@ -611,6 +634,40 @@ def generateInput():
     "files": files,
     "mainFile": f"{base_name}.inp",
   }
+
+
+def _get_highlight_styles():
+  rules = []
+
+  rules.append({
+    "patterns": [
+      {"regexp": "&[A-Z_]+"},
+      {"regexp": "&END\\s+[A-Z_]+"},
+    ],
+    "format": {"preset": "title"},
+  })
+
+  rules.append({
+    "patterns": [{"regexp": "^\\s*[A-Z_]+\\b"}],
+    "format": {"preset": "keyword"},
+  })
+
+  rules.append({
+    "patterns": [{"regexp": "^\\s*[A-Z_]+\\s+(.+)$"}],
+    "format": {"preset": "property"},
+  })
+
+  rules.append({
+    "patterns": [{"regexp": "\\b[+-]?[.0-9]+(?:[eEdD][+-]?[.0-9]+)?\\b"}],
+    "format": {"preset": "literal"},
+  })
+
+  rules.append({
+    "patterns": [{"regexp": "!.*$"}, {"regexp": "#.*$"}],
+    "format": {"preset": "comment"},
+  })
+
+  return [{"style": "cp2k-default", "rules": rules}]
 
 
 if __name__ == "__main__":

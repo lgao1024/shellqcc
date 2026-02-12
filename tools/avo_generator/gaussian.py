@@ -1,6 +1,6 @@
 """
 /*****************************************************************************
-  This source file is part of the Avogadro project. Version 260212
+  This source file is part of the Avogadro project. Version 251027
 
   This source code is released under the New BSD License, (the "License").
 
@@ -167,7 +167,7 @@ def getOptions():
     },
   }
 
-  return {"userOptions": [user_options, alt_options]}
+  return {"userOptions": [user_options, alt_options], "highlightStyles": _get_highlight_styles()}
 
 
 def _build_solvation(solvation_type, solvent):
@@ -255,7 +255,7 @@ def generateInput():
 
   result = {
     "mainFile": f"{base_name}.gjf",
-    "files": [{"filename": f"{base_name}.gjf", "contents": inp}],
+    "files": [{"filename": f"{base_name}.gjf", "contents": inp, "highlightStyles": ["gaussian-default"]}],
   }
 
   if DEBUG:
@@ -265,6 +265,37 @@ def generateInput():
     result["warnings"] = WARNINGS
 
   return result
+
+
+def _get_highlight_styles():
+  rules = []
+
+  rules.append({
+    "patterns": [{"regexp": "^%[A-Za-z_][A-Za-z0-9_]*"}],
+    "format": {"preset": "title"},
+  })
+
+  rules.append({
+    "patterns": [{"regexp": "^%[A-Za-z_][A-Za-z0-9_]*=([^\\n]+)$"}],
+    "format": {"preset": "property"},
+  })
+
+  rules.append({
+    "patterns": [{"regexp": "^#.*$"}],
+    "format": {"preset": "keyword"},
+  })
+
+  rules.append({
+    "patterns": [{"regexp": "^\\s+[^\\n]*\\|[^\\n]*$"}],
+    "format": {"preset": "comment"},
+  })
+
+  rules.append({
+    "patterns": [{"regexp": "\\b[+-]?[.0-9]+(?:[eEdD][+-]?[.0-9]+)?\\b"}],
+    "format": {"preset": "literal"},
+  })
+
+  return [{"style": "gaussian-default", "rules": rules}]
 
 
 if __name__ == "__main__":

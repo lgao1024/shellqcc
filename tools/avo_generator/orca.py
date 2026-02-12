@@ -1,6 +1,6 @@
 """
 /*****************************************************************************
-  This source file is part of the Avogadro project. Version 260212
+  This source file is part of the Avogadro project. Version 251027
 
   This source code is released under the New BSD License, (the "License").
 ******************************************************************************/
@@ -221,6 +221,7 @@ def getOptions():
   return {
     "userOptions": [user_options, aimd_options],
     "inputMoleculeFormat": "cjson",
+    "highlightStyles": _get_highlight_styles(),
   }
 
 
@@ -511,7 +512,7 @@ def generateInput():
   inp = generateInputFile(payload["options"], payload["cjson"])
   base_name = payload["options"]["Filename Base"]
 
-  files = [{"filename": f"{base_name}.inp", "contents": inp}]
+  files = [{"filename": f"{base_name}.inp", "contents": inp, "highlightStyles": ["orca-default"]}]
   if DEBUG:
     files.append({"filename": "debug_info", "contents": stdin_str})
 
@@ -519,6 +520,55 @@ def generateInput():
     "files": files,
     "mainFile": f"{base_name}.inp",
   }
+
+
+def _get_highlight_styles():
+  rules = []
+
+  rules.append({
+    "patterns": [
+      {"regexp": "^!.*$"},
+      {"regexp": "\\bnprocs\\b"},
+      {"regexp": "\\bMaxIter\\b"},
+      {"regexp": "\\bxyz\\b"},
+      {"regexp": "\\btddft\\b"},
+      {"regexp": "\\bmd\\b"},
+      {"regexp": "\\bconstraints\\b"},
+    ],
+    "format": {"preset": "keyword"},
+  })
+
+  rules.append({
+    "patterns": [
+      {"regexp": "^%maxcore\\s+([0-9]+)\\s*$"},
+      {"regexp": "^%pal\\s+nprocs\\s+([0-9]+)\\s+end\\s*$"},
+      {"regexp": "^\\s*MaxIter\\s+([0-9]+)\\s*$"},
+    ],
+    "format": {"preset": "property"},
+  })
+
+  rules.append({
+    "patterns": [{"regexp": "\\b[+-]?[.0-9]+(?:[eEdD][+-]?[.0-9]+)?\\b"}],
+    "format": {"preset": "literal"},
+  })
+
+  rules.append({
+    "patterns": [{"regexp": "^#.*$"}],
+    "format": {"preset": "comment"},
+  })
+
+  # Keep this rule last so `%block` headers (e.g. `%geom`, `%pal`) and `end`
+  # are not overridden by generic keyword rules.
+  rules.append({
+    "patterns": [
+      {"regexp": "^%\\w+"},
+      {"regexp": "^\\s*end\\b"},
+      {"regexp": "\\bend\\s*$"},
+    ],
+    "format": {"preset": "title"},
+  })
+
+  return [{"style": "orca-default", "rules": rules}]
 
 
 if __name__ == "__main__":
