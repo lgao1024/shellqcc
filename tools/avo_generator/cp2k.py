@@ -26,6 +26,7 @@ import xml.etree.ElementTree as ET
 
 TARGET_NAME = "CP2K2025"
 DEBUG = False
+FRACTIONAL_TOL = 1.0e-6
 
 # Number of valence electrons for selected chemical elements.
 VALENCE_ELECTRONS = {
@@ -181,6 +182,36 @@ def parse_cml(cml):
   return ET.fromstring(cml)
 
 
+def parse_atoms(cml, vectors=None):
+  root = parse_cml(cml)
+  atom_array = root.find(".//{*}atomArray")
+  atoms = []
+  if atom_array is None:
+    return atoms
+
+  for atom in atom_array.findall("{*}atom"):
+    element = atom.get("elementType")
+    x = atom.get("x3")
+    y = atom.get("y3")
+    z = atom.get("z3")
+
+    if element is None:
+      continue
+
+    if x is not None and y is not None and z is not None:
+      atoms.append((element, float(x), float(y), float(z)))
+      continue
+
+    fx = atom.get("xFract")
+    fy = atom.get("yFract")
+    fz = atom.get("zFract")
+    if fx is not None and fy is not None and fz is not None and vectors is not None:
+      cart = _fractional_to_cartesian([float(fx), float(fy), float(fz)], vectors)
+      atoms.append((element, cart[0], cart[1], cart[2]))
+
+  return atoms
+
+
 def generateElements(cml, unique=0):
   root = parse_cml(cml)
   atom_array = root.find(".//{*}atomArray")
@@ -288,6 +319,77 @@ def format_vector(vector):
   return " ".join(f"{value:12.7f}" for value in vector)
 
 
+def format_atom_line(atom):
+  element, x, y, z = atom
+  return f"      {element:<2s} {x:16.10f} {y:16.10f} {z:16.10f}"
+
+
+def _cross(v1, v2):
+  return [
+    v1[1] * v2[2] - v1[2] * v2[1],
+    v1[2] * v2[0] - v1[0] * v2[2],
+    v1[0] * v2[1] - v1[1] * v2[0],
+  ]
+
+
+def _dot(v1, v2):
+  return v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2]
+
+
+def _cartesian_to_fractional(cart, vectors, tol):
+  vector_a, vector_b, vector_c = vectors
+  b_cross_c = _cross(vector_b, vector_c)
+  c_cross_a = _cross(vector_c, vector_a)
+  a_cross_b = _cross(vector_a, vector_b)
+  volume = _dot(vector_a, b_cross_c)
+  if abs(volume) < tol:
+    raise ValueError("Invalid cell vectors: near-zero cell volume.")
+
+  fx = _dot(cart, b_cross_c) / volume
+  fy = _dot(cart, c_cross_a) / volume
+  fz = _dot(cart, a_cross_b) / volume
+  return [fx, fy, fz]
+
+
+def _fractional_to_cartesian(frac, vectors):
+  vector_a, vector_b, vector_c = vectors
+  fx, fy, fz = frac
+  return [
+    fx * vector_a[0] + fy * vector_b[0] + fz * vector_c[0],
+    fx * vector_a[1] + fy * vector_b[1] + fz * vector_c[1],
+    fx * vector_a[2] + fy * vector_b[2] + fz * vector_c[2],
+  ]
+
+
+def _wrap_fractional(value, tol):
+  wrapped = value - math.floor(value)
+  if wrapped < tol or wrapped > 1.0 - tol:
+    return 0.0
+  return wrapped
+
+
+def deduplicate_periodic_atoms(atoms, vectors, tol=FRACTIONAL_TOL):
+  unique_atoms = []
+  seen = set()
+
+  for element, x, y, z in atoms:
+    frac = _cartesian_to_fractional([x, y, z], vectors, tol)
+    wrapped = [_wrap_fractional(value, tol) for value in frac]
+    key = (
+      element,
+      int(round(wrapped[0] / tol)),
+      int(round(wrapped[1] / tol)),
+      int(round(wrapped[2] / tol)),
+    )
+    if key in seen:
+      continue
+    seen.add(key)
+    cart = _fractional_to_cartesian(wrapped, vectors)
+    unique_atoms.append((element, cart[0], cart[1], cart[2]))
+
+  return unique_atoms
+
+
 def _append_global(lines, title, calculate):
   run_type_map = {
     "Energy": "ENERGY",
@@ -365,11 +467,11 @@ def _append_dft_block(lines, opts, functional, is_periodic_system):
   ])
 
 
-def _append_subsys_dft_block(lines, cml, basis_set, functional, vectors, is_periodic_system):
+def _append_subsys_dft_block(lines, atoms, basis_set, functional, vectors, is_periodic_system):
   vector_a, vector_b, vector_c = vectors
   lines.append("  &SUBSYS")
 
-  for element in sorted(generateElements(cml, unique=1)):
+  for element in sorted({atom[0] for atom in atoms}):
     if element not in VALENCE_ELECTRONS:
       raise ValueError(f"No valence electron mapping for element: {element}")
 
@@ -389,9 +491,9 @@ def _append_subsys_dft_block(lines, cml, basis_set, functional, vectors, is_peri
     f"      C     {format_vector(vector_c)}",
     "    &END CELL ",
     "    &COORD",
-    "$$coords:      S      x    y    z$$",
-    "    &END COORD",
   ])
+  lines.extend([format_atom_line(atom) for atom in atoms])
+  lines.append("    &END COORD")
 
   if not is_periodic_system:
     lines.extend([
@@ -472,6 +574,9 @@ def generateInputFile(cml, opts):
   cell_vectors = generateCellVectors(str(cml))
   is_periodic_system = cell_vectors is not None
   vectors = cell_vectors if is_periodic_system else generateMolecularCell(str(cml))
+  atoms = parse_atoms(str(cml), vectors=vectors)
+  if is_periodic_system:
+    atoms = deduplicate_periodic_atoms(atoms, vectors)
 
   lines = []
   _append_global(lines, title, calculate)
@@ -483,7 +588,7 @@ def generateInputFile(cml, opts):
 
   if method == "Electronic structure methods (DFT)":
     _append_dft_block(lines, opts, functional, is_periodic_system)
-    _append_subsys_dft_block(lines, str(cml), basis_set, functional, vectors, is_periodic_system)
+    _append_subsys_dft_block(lines, atoms, basis_set, functional, vectors, is_periodic_system)
   elif method == "Molecular Mechanics":
     _append_mm_block(lines)
 
