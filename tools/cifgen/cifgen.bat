@@ -3,8 +3,7 @@
 setlocal EnableExtensions
 
 if "%~1"=="" (
-  echo Usage: %~nx0 input_file [output_file]
-  exit /b 2
+  goto :usage
 )
 
 where cscript >nul 2>nul
@@ -15,15 +14,42 @@ if errorlevel 1 (
 
 cscript //nologo //E:JScript "%~f0" "%~f1" "%~2"
 exit /b %ERRORLEVEL%
+
+:usage
+echo Usage: %~nx0 input_file [output_file]
+echo.
+echo Convert by input suffix:
+echo   - .cif  ^> .txt
+echo   - .txt ^> .cif
+echo.
+echo TXT format:
+echo   1) First non-empty line:
+echo      sg a b c alpha beta gamma
+echo      Example: P1 24.1696 24.1696 18.9154 90 90 90
+echo      If sg contains spaces, quote it:
+echo      Example: 'P 21/c' 10.1 11.2 12.3 90 110 90
+echo.
+echo   2) Atom lines (one per line), either form is accepted:
+echo      element x y z [occ]
+echo      label element x y z [occ]
+echo      Example: O 0.117520 0.436050 0.139330 1.0
+echo      Example: O1 O 0.117520 0.436050 0.139330 1.0
+echo.
+echo Note:
+echo   - Empty lines and comments starting with # are ignored.
+echo   - If occ is omitted, default is 1.0.
+
+echo %CMDCMDLINE% | findstr /I /C:"/c" >nul && pause
+exit /b 2
 */
 
 //
 // =============== JScript section (runs under cscript) ===============
-// Usage: cscript //nologo //E:JScript xtal_convert.bat input [output]
+// Usage: cscript //nologo //E:JScript cifgen.bat input [output]
 //
 function die(msg){ WScript.StdErr.WriteLine(msg); WScript.Quit(2); }
 
-if (WScript.Arguments.length < 1) die("Usage: xtal_convert.bat input_file [output_file]");
+if (WScript.Arguments.length < 1) die("Usage: cifgen.bat input_file [output_file]");
 
 var inPath  = WScript.Arguments.Item(0);
 var outPath = (WScript.Arguments.length >= 2) ? WScript.Arguments.Item(1) : "";
