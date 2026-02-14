@@ -31,7 +31,7 @@ def getMetaData():
     meta_data['outputFormat'] = 'cjson'
     meta_data['operations'] = ['read']
     meta_data['identifier'] = 'Materials Studio XSD Format'
-    meta_data['name'] = 'XSD'
+    meta_data['name'] = 'Materials Studio XSD'
     meta_data['description'] = 'Read Materials Studio XSD and preserve cell/symmetry as cjson.'
     meta_data['fileExtensions'] = ['xsd']
     meta_data['mimeTypes'] = ['chemical/x-materials-studio-xsd']

@@ -15,7 +15,7 @@ def getMetaData():
     metaData['outputFormat'] = 'cjson'
     metaData['operations'] = ['read']
     metaData['identifier'] = 'QE Input Format'
-    metaData['name'] = 'QE Input'
+    metaData['name'] = 'QE INP'
     metaData['description'] = "Read QE input and convert ATOMIC_POSITIONS/CELL_PARAMETERS to cjson."
     metaData['fileExtensions'] = ['in', 'pwi']
     metaData['mimeTypes'] = ['chemical/x-quantum-espresso-input']
