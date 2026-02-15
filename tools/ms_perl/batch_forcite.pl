@@ -6,11 +6,11 @@ use Cwd qw(getcwd);
 use File::Spec;
 
 # ====== Forcite 设置（按你的 Copy Script）======
-my $FF       = "UFF4MOF";
+my $FF       = "Universal";
 my $QUALITY  = "Fine";
 my $CHARGE   = "Use current";
 my $P_EXT    = 0.0001;
-my $CELL_opt  = "Yes";
+my $CELL_opt  = "No";
 
 
 
