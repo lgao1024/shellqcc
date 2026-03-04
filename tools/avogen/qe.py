@@ -12,6 +12,7 @@ High-level flow:
 """
 
 import argparse
+from functools import lru_cache
 import json
 import math
 import sys
@@ -28,14 +29,20 @@ VALENCE_ELECTRONS = {
   "H": 1, "He": 2,
   "Li": 3, "Be": 4, "B": 3, "C": 4, "N": 5, "O": 6, "F": 7, "Ne": 8,
   "Na": 9, "Mg": 10, "Al": 3, "Si": 4, "P": 5, "S": 6, "Cl": 7, "Ar": 8,
-  "K": 9, "Ca": 10,
-  "Sc": 11, "Ti": 12, "V": 13, "Cr": 14, "Mn": 15, "Fe": 16, "Co": 17,
-  "Ni": 18, "Cu": 11, "Zn": 12,
+  "K": 9, "Ca": 10, "Sc": 11, "Ti": 12, "V": 13, "Cr": 14, "Mn": 15,
+  "Fe": 16, "Co": 17, "Ni": 18, "Cu": 11, "Zn": 12,
   "Ga": 13, "Ge": 4, "As": 5, "Se": 6, "Br": 7, "Kr": 8,
-  "Y": 11, "Zr": 12, "Nb": 13, "Mo": 14,
+  "Rb": 9, "Sr": 10, "Y": 11, "Zr": 12, "Nb": 13, "Mo": 14, "Tc": 15,
   "Ru": 16, "Rh": 17, "Pd": 18, "Ag": 11, "Cd": 12,
-  "In": 13, "Sn": 4, "Sb": 5, "Te": 6, "I": 7,
-  "Ba": 10, "W": 14, "Au": 11, "Hg": 12, "Bi": 15,
+  "In": 13, "Sn": 4, "Sb": 5, "Te": 6, "I": 7, "Xe": 8,
+  "Cs": 9, "Ba": 10, "La": 11, "Ce": 12, "Pr": 13, "Nd": 14, "Pm": 15,
+  "Sm": 16, "Eu": 17, "Gd": 18, "Tb": 19, "Dy": 20, "Ho": 21, "Er": 22,
+  "Tm": 23, "Yb": 24, "Lu": 25, "Hf": 12, "Ta": 13, "W": 14, "Re": 15,
+  "Os": 16, "Ir": 17, "Pt": 18, "Au": 11, "Hg": 12,
+  "Tl": 13, "Pb": 4, "Bi": 15, "Po": 6, "At": 7, "Rn": 8,
+  "Fr": 9, "Ra": 10, "Ac": 11, "Th": 12, "Pa": 13, "U": 14, "Np": 15,
+  "Pu": 16, "Am": 17, "Cm": 18, "Bk": 19, "Cf": 20, "Es": 21, "Fm": 22,
+  "Md": 23, "No": 24, "Lr": 25,
 }
 
 # Atomic masses used in ATOMIC_SPECIES output (fallback: 1.0 if unknown).
@@ -50,31 +57,41 @@ ATOMIC_MASSES = {
   "Fe": 55.845, "Co": 58.9332, "Ni": 58.6934, "Cu": 63.546, "Zn": 65.38,
   "Ga": 69.723, "Ge": 72.64, "As": 74.9216, "Se": 78.96, "Br": 79.904,
   "Kr": 83.798,
-  "Y": 88.9058, "Zr": 91.224, "Nb": 92.9064, "Mo": 95.96,
+  "Rb": 85.4678, "Sr": 87.62, "Y": 88.9058, "Zr": 91.224, "Nb": 92.9064,
+  "Mo": 95.96, "Tc": 98.0,
   "Ru": 101.07, "Rh": 102.9055, "Pd": 106.42, "Ag": 107.8682, "Cd": 112.411,
   "In": 114.818, "Sn": 118.71, "Sb": 121.76, "Te": 127.60, "I": 126.9045,
-  "Ba": 137.327, "W": 183.84, "Au": 196.9666, "Hg": 200.59, "Bi": 208.9804,
+  "Xe": 131.293, "Cs": 132.9055, "Ba": 137.327,
+  "La": 138.9055, "Ce": 140.116, "Pr": 140.9077, "Nd": 144.24, "Pm": 145.0,
+  "Sm": 150.36, "Eu": 151.964, "Gd": 157.25, "Tb": 158.9253, "Dy": 162.50,
+  "Ho": 164.9303, "Er": 167.259, "Tm": 168.9342, "Yb": 173.04, "Lu": 174.967,
+  "Hf": 178.49, "Ta": 180.9479, "W": 183.84, "Re": 186.207, "Os": 190.23,
+  "Ir": 192.217, "Pt": 195.084, "Au": 196.9666, "Hg": 200.59,
+  "Tl": 204.3833, "Pb": 207.2, "Bi": 208.9804, "Po": 209.0, "At": 210.0,
+  "Rn": 222.0, "Fr": 223.0, "Ra": 226.0, "Ac": 227.0, "Th": 232.0381,
+  "Pa": 231.0359, "U": 238.0289, "Np": 237.0, "Pu": 244.0, "Am": 243.0,
+  "Cm": 247.0, "Bk": 247.0, "Cf": 251.0, "Es": 252.0, "Fm": 257.0,
+  "Md": 258.0, "No": 259.0, "Lr": 262.0,
 }
 
-HUBBARD_U_EXPLICIT = {
-  # Keep qei.sh presets for common 3d metals.
-  "Ti": ("3d", 4.0),
-  "Fe": ("3d", 5.0),
-  "Cu": ("3d", 4.0),
-  "Ni": ("3d", 6.0),
-  "Co": ("3d", 5.0),
-  "V": ("3d", 3.0),
-  "Cr": ("3d", 3.0),
-  "Mn": ("3d", 4.0),
-  "Zn": ("3d", 8.0),
-  "Sc": ("3d", 2.0),
-}
-
-
+@lru_cache(maxsize=1)
 def _build_hubbard_u_presets():
   """Build complete Hubbard U presets, keeping explicit values as priority."""
+  hubbard_u_explicit = {
+    # Keep qei.sh presets for common 3d metals.
+    "Ti": ("3d", 4.0),
+    "Fe": ("3d", 5.0),
+    "Cu": ("3d", 4.0),
+    "Ni": ("3d", 6.0),
+    "Co": ("3d", 5.0),
+    "V": ("3d", 3.0),
+    "Cr": ("3d", 3.0),
+    "Mn": ("3d", 4.0),
+    "Zn": ("3d", 8.0),
+    "Sc": ("3d", 2.0),
+  }
   # Start from explicit (highest-priority) element presets.
-  presets = dict(HUBBARD_U_EXPLICIT)
+  presets = dict(hubbard_u_explicit)
 
   def add(elements, orbital, u_value):
     # Only fill elements not explicitly specified above.
@@ -106,9 +123,6 @@ def _build_hubbard_u_presets():
   add(["Nh", "Fl", "Mc", "Lv"], "7p", 2.0)
 
   return presets
-
-
-HUBBARD_U_PRESETS = _build_hubbard_u_presets()
 
 
 def getOptions():
@@ -212,46 +226,32 @@ def _get_highlight_styles():
   return [{"style": "qe-default", "rules": rules}]
 
 
-def parse_cml(cml):
-  """Parse CML XML text into an ElementTree root element."""
-  return ET.fromstring(cml)
-
-
-def _cross(v1, v2):
-  """3D vector cross product."""
-  return [
-    v1[1] * v2[2] - v1[2] * v2[1],
-    v1[2] * v2[0] - v1[0] * v2[2],
-    v1[0] * v2[1] - v1[1] * v2[0],
-  ]
-
-
-def _dot(v1, v2):
-  """3D vector dot product."""
-  return v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2]
-
-
-def _vector_norm(v):
-  """Euclidean norm of a 3D vector."""
-  return math.sqrt(_dot(v, v))
-
-
 def _cartesian_to_fractional(cart, vectors, tol=FRACTIONAL_TOL):
   """Convert Cartesian coordinates to fractional coordinates for a general cell."""
+  def cross(v1, v2):
+    return [
+      v1[1] * v2[2] - v1[2] * v2[1],
+      v1[2] * v2[0] - v1[0] * v2[2],
+      v1[0] * v2[1] - v1[1] * v2[0],
+    ]
+
+  def dot(v1, v2):
+    return v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2]
+
   # Build reciprocal-like basis via cross products.
   vector_a, vector_b, vector_c = vectors
-  b_cross_c = _cross(vector_b, vector_c)
-  c_cross_a = _cross(vector_c, vector_a)
-  a_cross_b = _cross(vector_a, vector_b)
+  b_cross_c = cross(vector_b, vector_c)
+  c_cross_a = cross(vector_c, vector_a)
+  a_cross_b = cross(vector_a, vector_b)
   # Cell volume is the triple product.
-  volume = _dot(vector_a, b_cross_c)
+  volume = dot(vector_a, b_cross_c)
   if abs(volume) < tol:
     raise ValueError("Invalid cell vectors: near-zero cell volume.")
 
   # Project Cartesian coordinate onto reciprocal basis.
-  fx = _dot(cart, b_cross_c) / volume
-  fy = _dot(cart, c_cross_a) / volume
-  fz = _dot(cart, a_cross_b) / volume
+  fx = dot(cart, b_cross_c) / volume
+  fy = dot(cart, c_cross_a) / volume
+  fz = dot(cart, a_cross_b) / volume
   return [fx, fy, fz]
 
 
@@ -266,17 +266,9 @@ def _fractional_to_cartesian(frac, vectors):
   ]
 
 
-def _wrap_fractional(value, tol=FRACTIONAL_TOL):
-  """Wrap fractional value to [0,1), snapping boundary noise to 0."""
-  wrapped = value - math.floor(value)
-  if wrapped < tol or wrapped > 1.0 - tol:
-    return 0.0
-  return wrapped
-
-
 def parse_cell(cml):
   """Parse crystal parameters from CML and return 3x3 Cartesian cell vectors."""
-  root = parse_cml(cml)
+  root = ET.fromstring(cml)
   # Crystal block is optional in CML; missing means non-periodic molecule.
   crystal = root.find(".//{*}crystal")
   if crystal is None:
@@ -317,7 +309,7 @@ def parse_cell(cml):
 
 def parse_atoms_with_fractional(cml, vectors=None):
   """Parse atoms from CML, preserving both cart and frac forms when possible."""
-  root = parse_cml(cml)
+  root = ET.fromstring(cml)
   atom_array = root.find(".//{*}atomArray")
   atoms = []
   # Empty atom array yields empty atom list.
@@ -356,6 +348,12 @@ def parse_atoms_with_fractional(cml, vectors=None):
 
 def deduplicate_periodic_atoms(atoms, vectors, tol=FRACTIONAL_TOL):
   """Remove periodic duplicates by wrapped fractional coordinates + element key."""
+  def wrap_fractional(value):
+    wrapped = value - math.floor(value)
+    if wrapped < tol or wrapped > 1.0 - tol:
+      return 0.0
+    return wrapped
+
   unique_atoms = []
   seen = set()
   for atom in atoms:
@@ -366,7 +364,7 @@ def deduplicate_periodic_atoms(atoms, vectors, tol=FRACTIONAL_TOL):
       frac = _cartesian_to_fractional(atom["cart"], vectors, tol)
 
     # Wrap to unit cell and quantize by tolerance to avoid float jitter.
-    wrapped = [_wrap_fractional(value, tol) for value in frac]
+    wrapped = [wrap_fractional(value) for value in frac]
     key = (
       element,
       int(round(wrapped[0] / tol)),
@@ -387,7 +385,7 @@ def deduplicate_periodic_atoms(atoms, vectors, tol=FRACTIONAL_TOL):
 def _k_grid_from_resolution(vectors, resolution):
   """Compute automatic Monkhorst-Pack grid from target k-resolution (1/Angstrom)."""
   # Use real-space cell lengths to estimate reciprocal sampling counts.
-  lengths = [_vector_norm(v) for v in vectors]
+  lengths = [math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) for v in vectors]
   grid = []
   for length in lengths:
     # Degenerate axis fallback.
@@ -443,43 +441,17 @@ def _ecutrho_from_type(ecutwfc, pseudo_type):
   return int(ecutwfc * 4)
 
 
-def _pseudo_filename(element, functional, pseudo_type):
-  """Build pseudo filename as '<Elem>-<functional>-<Basis>.UPF'."""
-  func = (str(functional).strip() or "pbesol").lower()
-  ptype = str(pseudo_type).strip().upper() or "NC"
-  return f"{element}-{func}-{ptype}.UPF"
-
-
-def _format_species_line(element, functional, pseudo_type):
-  """Format one ATOMIC_SPECIES row with aligned element and mass columns."""
-  mass = ATOMIC_MASSES.get(element, 1.0)
-  return f"{element:<2s} {mass:9.5f}  {_pseudo_filename(element, functional, pseudo_type)}"
-
-
-def _species_in_atom_order(atoms):
-  """Return unique element list in first-appearance order from atom sequence."""
-  species = []
-  seen = set()
-  for atom in atoms:
-    element = atom["element"]
-    # Preserve order of first appearance.
-    if element in seen:
-      continue
-    seen.add(element)
-    species.append(element)
-  return species
-
-
 def _hubbard_u_lines(species):
   """Generate HUBBARD block lines for species that have preset values."""
+  presets = _build_hubbard_u_presets()
   # Emit only for species present in this structure.
-  hubbard_species = [element for element in species if element in HUBBARD_U_PRESETS]
+  hubbard_species = [element for element in species if element in presets]
   if not hubbard_species:
     return []
   # Use ortho-atomic syntax as in qei.sh workflow.
   lines = ["HUBBARD {ortho-atomic}"]
   for element in hubbard_species:
-    orbital, u_value = HUBBARD_U_PRESETS[element]
+    orbital, u_value = presets[element]
     lines.append(f"  U  {element}-{orbital}  {u_value:.1f}")
   return lines
 
@@ -514,7 +486,15 @@ def build_qe_input(cml, opts):
     raise ValueError("No atoms parsed from CML (x3/y3/z3 or xFract/yFract/zFract).")
 
   # Pull composition metrics used in SYSTEM block.
-  species = _species_in_atom_order(atoms)
+  species = []
+  seen_species = set()
+  for atom in atoms:
+    element = atom["element"]
+    # Preserve order of first appearance.
+    if element in seen_species:
+      continue
+    seen_species.add(element)
+    species.append(element)
   nat = len(atoms)
   ntyp = len(species)
 
@@ -664,7 +644,9 @@ def build_qe_input(cml, opts):
   lines.append("ATOMIC_SPECIES")
   pseudo_type = str(_opt(opts, "Basis", "NC")).strip().upper() or "NC"
   for element in species:
-    lines.append("  " + _format_species_line(element, functional, pseudo_type))
+    mass = ATOMIC_MASSES.get(element, 1.0)
+    pseudo = f"{element}-{functional}-{pseudo_type}.UPF"
+    lines.append(f"  {element:<2s} {mass:9.5f}  {pseudo}")
 
   # Atomic positions in crystal coordinates.
   lines.append("ATOMIC_POSITIONS {crystal}")
@@ -691,28 +673,25 @@ def build_qe_input(cml, opts):
   return "\n".join(lines) + "\n"
 
 
-# Metal list used by sorting (metals first) and U-preset coverage checks.
-_METALS = {
-  "Li", "Be", "Na", "Mg", "Al", "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe",
-  "Co", "Ni", "Cu", "Zn", "Ga", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru",
-  "Rh", "Pd", "Ag", "Cd", "In", "Sn", "Cs", "Ba", "La", "Ce", "Pr", "Nd",
-  "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu", "Hf",
-  "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po",
-  "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf",
-  "Es", "Fm", "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds",
-  "Rg", "Cn", "Nh", "Fl", "Mc", "Lv",
-}
-
-
 def _sorted_atoms_by_element(atoms, vectors):
   """Sort atoms deterministically: metals first, then element and position."""
+  metals = {
+    "Li", "Be", "Na", "Mg", "Al", "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe",
+    "Co", "Ni", "Cu", "Zn", "Ga", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru",
+    "Rh", "Pd", "Ag", "Cd", "In", "Sn", "Cs", "Ba", "La", "Ce", "Pr", "Nd",
+    "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu", "Hf",
+    "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po",
+    "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf",
+    "Es", "Fm", "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds",
+    "Rg", "Cn", "Nh", "Fl", "Mc", "Lv",
+  }
   # Include fractional coordinates in key for stable intra-element ordering.
   def atom_key(atom):
     frac = atom["frac"]
     if frac is None:
       frac = _cartesian_to_fractional(atom["cart"], vectors)
     element = atom["element"]
-    metal_group = 0 if element in _METALS else 1
+    metal_group = 0 if element in metals else 1
     return (metal_group, element, frac[0], frac[1], frac[2])
 
   return sorted(atoms, key=atom_key)
