@@ -1,6 +1,6 @@
 #!/bin/bash
 # orcai.sh — Automate ORCA calculations
-# Usage: ./orcai.sh <template_file>
+# Usage: ./orcai.sh <template_file> (xtb.tmp for XTB mode, or any other template for standard input preparation)
 
 # ==============================================================================
 # Global Configuration
@@ -11,6 +11,59 @@ TEMPLATE_FILE="$1"
 # ==============================================================================
 # Function Definitions
 # ==============================================================================
+
+print_help() {
+cat <<EOF
+$(basename "$0") — ORCA Input Preparation & Execution Helper
+
+DESCRIPTION
+  Automates ORCA input preparation and batch execution using template-based
+  workflows. Supports both XTB pre-optimization mode and general ORCA
+  input generation from XYZ structures.
+
+USAGE
+  $(basename "$0") <template_file>
+  $(basename "$0") xtb.tmp
+  $(basename "$0") -h | --help
+
+MODES
+  xtb.tmp
+      XTB preparation mode
+      - Converts .mol → .xyz automatically if needed
+      - Generates ORCA XTB input files
+      - Runs ORCA calculations
+      - Stores results in per-structure working directories
+      - Returns optimized geometries (.xyz)
+
+  other_template.inp
+      Standard ORCA input preparation mode
+      - Generates ORCA .inp files from *.xyz structures
+      - Uses provided template
+      - Does NOT execute ORCA automatically (editable before run)
+
+FEATURES
+  • Automatic structure conversion (.mol → .xyz via ASE)
+  • Template-driven input generation
+  • Batch processing of multiple structures
+  • Automatic working-directory organization
+  • Optional automatic template creation (xtb.tmp)
+
+EXAMPLES
+  $(basename "$0") xtb.tmp
+      Run XTB pre-optimization workflow
+
+  $(basename "$0") opt.tmp
+      Generate ORCA optimization inputs from *.xyz
+
+  $(basename "$0") sp.tmp
+      Generate ORCA single-point calculation inputs
+
+NOTES
+  If xtb.tmp is missing, the script can generate a default template
+  automatically before execution.
+
+EOF
+}
 
 function xtb_prepare() {
     local template="$1"
@@ -85,6 +138,17 @@ function input_prepare() {
 # ==============================================================================
 # Main Execution Logic
 # ==============================================================================
+if [[ $# -eq 0 ]]; then
+    print_help
+    exit 0
+fi
+
+for a in "$@"; do
+    [[ "$a" == "-h" || "$a" == "--help" ]] && {
+        print_help
+        exit 0
+    }
+done
 
 # 1. Check if argument exists
 if [[ -z "$TEMPLATE_FILE" ]]; then

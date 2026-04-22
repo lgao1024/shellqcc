@@ -22,14 +22,13 @@
 # Supported Tasks:
 #   pw (default), dos, co, esp, hp, bands, w90, phonon, thermo, dry, all
 #
-# Version: 0.4.1 (2026-01-28)
 # ==============================================================================
 
 set -euo pipefail
 
 SCRIPT_NAME=$(basename "$0")
-VERSION="0.4.1"
-DATE="2026-01-28"
+VERSION="0.4.2"
+DATE="2026-04-22"
 
 # ---------- Helpers ----------
 msg()  { printf "[qec] %s\n" "$*"; }
@@ -52,19 +51,19 @@ USAGE
 AVAILABLE TASKS
   pw      : Self-Consistent Field / Relax (pw.x)
   dos     : Density of States (dos.x)
-  bands   : Band Structure (bands.x)
+  bands   : Band Structure (bands.x, require .kpf file)
   co      : Optical Conductivity
   esp     : Electrostatic Potential
   hp      : Hubbard U (hp.x)
-  w90     : Wannier90 Interface
+  w90     : Wannier90 Interface (require .kpf file)
   phonon  : Phonon Calculation (ph.x)
   thermo  : Thermodynamics (thermo_pw.x)
   dry     : Dry run / Input validation
-  all     : Chain: pw -> dos -> co -> esp -> bands
+  all     : Chain: pw -> dos -> co -> esp
 
 EXAMPLES
-  ${SCRIPT_NAME} prefix.scf.in
-  ${SCRIPT_NAME} prefix.relax.in pw dos bands
+  ${SCRIPT_NAME} prefix.relax.in
+  ${SCRIPT_NAME} prefix.scf.in pw dos bands
 EOF
 }
 
@@ -83,7 +82,7 @@ run_qe() {
     phonon)  have_func calc_phonon  && { msg "→ calc_phonon $IN_FILE";  calc_phonon "$IN_FILE"; }  || warn "calc_phonon not defined" ;;
     thermo)  have_func calc_thermo  && { msg "→ calc_thermo $IN_FILE";  calc_thermo "$IN_FILE"; }  || warn "calc_thermo not defined" ;;
     dry)     have_func calc_dry     && { msg "→ calc_dry $IN_FILE";     calc_dry "$IN_FILE"; }     || warn "calc_dry not defined" ;;
-    all)     for step in pw dos co esp bands; do run_qe "$step" "$IN_FILE"; done ;;
+    all)     for step in pw dos co esp; do run_qe "$step" "$IN_FILE"; done ;;
     *)       err "Unknown task: $task" ;;
   esac
 }
@@ -236,7 +235,7 @@ calc_hp () {
     mpirun hp.x -in ${IN_FILE%%.*}.hp.in |tee ${IN_FILE%%.*}.hp.out
 }
 
-# require .kpf dile
+# require .kpf file
 calc_bands () {
     
     IN_FILE="$1"
@@ -324,7 +323,7 @@ calc_bands () {
 
 }
 
-# require .kpf dile
+# require .kpf file
 calc_w90 () {
 
     IN_FILE=$1

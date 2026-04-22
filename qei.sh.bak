@@ -15,6 +15,7 @@
 #   qei.sh <file.in>  [action]
 #   qei.sh <file.out> [type]
 #
+# Version: 0.4.1 (2026-02-28)
 # ==============================================================================
 
 # ==============================================================================
@@ -22,15 +23,14 @@
 # ==============================================================================
 
 SCRIPT_NAME=$(basename "$0")
-VERSION="0.4.2"
-DATE="2026-04-22"
+VERSION="0.4.1"
+DATE="2026-02-28"
 
-
-QE_PSEUDOLIB="/opt/_pseudo/upf_PBEsol"
-VASP_PSEUDOLIB="/opt/_pseudo/paw64_PBE"
-CP2K_DATA_DIR="/opt/cp2k-2025.2/data"
 ASE_PATH="ase"
 CIF2CELL_PATH="cif2cell"
+QE_PSEUDOLIB="/opt/_pseudo/upf_PBEsol"
+VASP_PSEUDOLIB="/opt/_pseudo/paw64_PBE"
+CP2K_DATA_DIR=/opt/cp2k-2025.2/data
 
 TMP_DIR="./tmp"
 PSEUDO_DIR="./pseudo"
@@ -43,7 +43,7 @@ ${SCRIPT_NAME} — Input Generation & Conversion v${VERSION} (${DATE})
 
 USAGE
   1. From Structure (CIF):
-     ${SCRIPT_NAME} <file.cif> [qe|vasp|cp2k] [scf|relax|vc-relax|freq]
+     ${SCRIPT_NAME} <file.cif> [qe|vasp|cp2k] [calc_type]
        • Generates input files for the specified code.
        • Default format: qe
        • Default calc_type: scf
@@ -56,9 +56,9 @@ USAGE
        • Example: ${SCRIPT_NAME} scf.in conv
 
   3. From Output (.out):
-     ${SCRIPT_NAME} <file.out> [cif|scf|relax|vc-relax]
+     ${SCRIPT_NAME} <file.out> [scf|relax|vc-relax]
        • Analyzes output logs.
-       • Default analysis: cif
+       • Default analysis: relax
        • Example: ${SCRIPT_NAME} relax.out vc-relax
 
   4. Interactive / Manual:
@@ -71,21 +71,7 @@ FLAGS
 EOF
 }
 
-
-
-# awk in-place via temp, POSIX-safe
-_awk() {
-  local tmp file
-  local args=("$@")
-  file="${args[-1]}"    
-  unset "args[-1]"      
-  tmp=$(mktemp "${file##*/}.XXXX") || return 1
-  awk "${args[@]}" "$file" >"$tmp" && mv "$tmp" "$file"
-}
-
-
-
-# parse number of valence electrons from UPF
+# parse z_valence from UPF
 _parse_zval() {
   local upf="$1"; local z
   if [[ "$upf" == *-gbrv* ]]; then
@@ -96,8 +82,6 @@ _parse_zval() {
   [[ -n "$z" ]] || z=0
   printf '%s\n' "$z"
 }
-
-
 
 # count atoms per element by parsing ATOMIC_POSITIONS block
 _count_atoms() {
@@ -110,9 +94,16 @@ _count_atoms() {
   ' "$infile" | sort
 }
 
+# awk in-place via temp, POSIX-safe
+_awk() {
+  local tmp file
+  local args=("$@")
+  file="${args[-1]}"    
+  unset "args[-1]"      
+  tmp=$(mktemp "${file##*/}.XXXX") || return 1
+  awk "${args[@]}" "$file" >"$tmp" && mv "$tmp" "$file"
+}
 
-
-# Generate QE input from CIF files
 cif2qe() {
 
     CIF_FILE="$1"
@@ -124,23 +115,29 @@ cif2qe() {
     $CIF2CELL_PATH "$CIF_FILE" -p pwscf -o $CIF2CELL_IN \
         --setup-all --no-reduce --print-digits=10 --k-resolution=$SCF_K_RESOLUTION --pwscf-pseudostring=$PP_FILE_NAME 
 
-    # Ask for user input on pseudo, charge, magnetization, functional, and ecutwfc
-    read -p "==> Assigin pseudo, charge, magnetization, functional, and ecutwfc [us/paw/NC 0 0 PBEsol 40 Ry]: " \
-        PSEUDO_TYPE CHARGE MAG DFTINPUT ECUT; PSEUDO_TYPE=${PSEUDO_TYPE:-nc}; CHARGE=${CHARGE:-0}; MAG=${MAG:-n}; DFTINPUT=${DFTINPUT:-pbesol}; ECUT=${ECUT:-40}
-    read -p "==> Prepare pseudo files to ${PSEUDO_DIR} ? [y/N] " CP_PSEUDO; CP_PSEUDO=${CP_PSEUDO:-n}
-    
-    # Prepare parameters for elements and Hubbard U
+    # Prepare ELEM_INFO and PSEUDOs
+    read -p "==> Assigin pseudo type, DFT functional, and ecutwfc value [US/paw/nc PBEsol 50 Ry]: " PSEUDO_TYPE DFTINPUT ECUT; PSEUDO_TYPE=${PSEUDO_TYPE:-us}; DFTINPUT=${DFTINPUT:-pbesol}; ECUT=${ECUT:-50}
+    read -p "==> Set charge and magnetization [0 0]: " CHARGE MAG; CHARGE=${CHARGE:-0}; MAG=${MAG:-n}
+    total_electrons=$(echo "0.0 - $CHARGE" | bc -l)
     declare -A ELEM_INFO
     declare -A U_PRESETS=(
-        ["Ti"]="3d 4.0" ["Fe"]="3d 5.0" ["Cu"]="3d 4.0" ["Ni"]="3d 6.0" ["Co"]="3d 5.0"
-        ["V"]="3d 3.0" ["Cr"]="3d 3.0" ["Mn"]="3d 4.0" ["Zn"]="3d 8.0" ["Sc"]="3d 2.0"
+        ["Ti"]="3d 4.0" 
+        ["Fe"]="3d 5.0" 
+        ["Cu"]="3d 4.0" 
+        ["Ni"]="3d 6.0" 
+        ["Co"]="3d 5.0" 
+        ["V"]="3d 3.0"  
+        ["Cr"]="3d 3.0" 
+        ["Mn"]="3d 4.0" 
+        ["Zn"]="3d 8.0" 
+        ["Sc"]="3d 2.0" 
     )
+
     while IFS=':' read -r elem count; do
         ELEM_INFO["$elem"]="$count"
     done < <(_count_atoms "$CIF2CELL_IN")
-    total_electrons=$(echo "0.0 - $CHARGE" | bc -l)
 
-    # Set up pseudopotential files for each element
+    read -p "==> Copy pseudo files to ${PSEUDO_DIR} ? [y/N] " CP_PSEUDO; CP_PSEUDO=${CP_PSEUDO:-n}
     for ELEM in "${!ELEM_INFO[@]}"; do
         files=($(ls $QE_PSEUDOLIB/${ELEM}-*${DFTINPUT}-*${PSEUDO_TYPE}*.UPF 2>/dev/null))
         if [ ${#files[@]} -eq 0 ]; then
@@ -172,7 +169,7 @@ cif2qe() {
         sed -i "s/$(grep -o '\S*\.UPF' "$CIF2CELL_IN" | grep "${ELEM}-")/${PSEUDO_NEW}/g" "$CIF2CELL_IN"
     done
 
-    # Print final pseudo info and calculate bands
+    # Verify final ELEM_INFO
     hoco_num=$(echo "$total_electrons / 2" | bc -l | xargs printf "%.0f")
     luco_num=$((hoco_num + 1))
     co_min=$((hoco_num - 2))
@@ -189,7 +186,11 @@ cif2qe() {
     echo "---------------------------------------------------------------"
     echo "Nele: $(printf "%.1f" "$total_electrons"); Nbnds: $suggested_band ($co_min → $co_max); HOCO: $hoco_num; LUCO: $luco_num"
 
-    # Search for transition metals in the input template
+
+
+
+
+    # Set up Hubbard U
     current_ts_metals=()  
     for ELEM in "${!ELEM_INFO[@]}"; do
         if [ "$(echo "${ELEM_INFO[$ELEM]}" | cut -d'|' -f3)" = "true" ]; then
@@ -197,7 +198,6 @@ cif2qe() {
         fi
     done
 
-    # Ask user if they want to set Hubbard U for transition metals, and if so, either use presets or ask for input
     if [ ${#current_ts_metals[@]} -gt 0 ]; then
         read -p "==> Using Hubbard U for transition metal: ${current_ts_metals[*]}? [y/N] " SET_HUBBARDU; SET_HUBBARDU=${SET_HUBBARDU:-N}
         if [[ "$SET_HUBBARDU" =~ ^[Yy]$ ]]; then
@@ -214,6 +214,7 @@ cif2qe() {
                     # Ask for input if no preset exists
                     read -p "No preset U value found for $ELEM, please enter orbital (e.g., 3d/4d): " orbital
                     read -p "Please enter U value for $ELEM-$orbital (eV): " u_value
+                    # Validate input is a number
                     while ! [[ "$u_value" =~ ^[0-9]+(\.[0-9]+)?$ ]]; do
                         echo "Input error! U value must be a number (e.g., 4.0)"
                         read -p "Please re-enter U value for $ELEM-$orbital (eV): " u_value
@@ -225,7 +226,7 @@ cif2qe() {
         fi
     fi
 
-    # rewrite generated input file with user-defined parameters
+    # &CONTROL, &SYSTEM, &ELECTRONS, &IONS, &CELL and K_POINTS blocks
     _awk -v calc_type="$CALC_TYPE" -v charge="$CHARGE" -v magnetization="$MAG" -v cp_pseudo="$CP_PSEUDO"\
         -v pseudo_dir="$PSEUDO_DIR" -v prefix="${CIF_FILE%.*}" -v tmp_dir="$TMP_DIR" -v num_band="$suggested_band"\
         -v dftinput="$DFTINPUT" -v ecut="$ECUT" -v pseudo_type="$PSEUDO_TYPE" \
@@ -255,9 +256,9 @@ cif2qe() {
                 print "  nbnd = " num_band
             }
             print "  ecutwfc = " ecut
-            if (pseudo_type == "us" || pseudo_type == "rrkjus" || pseudo_type == "gbrvus") {
+            if (pseudo_type == "us") {
                 print "  ecutrho = " (ecut * 10)
-            } else if (pseudo_type == "paw" || pseudo_type == "kjpaw"  || pseudo_type == "atompaw") {
+            } else if (pseudo_type == "paw") {
                 print "  ecutrho = " (ecut * 6)
             } else {
                 print "  ecutrho = " (ecut * 4)
@@ -324,14 +325,10 @@ cif2qe() {
         }
         NR > 9 { print }
         ' "$CIF2CELL_IN"
-    
-    # rename the output file according to the calculation type
+
     mv $CIF2CELL_IN ${CIF_FILE%.*}.$CALC_TYPE.in
 }  
 
-
-
-# Generate VASP input from CIF files
 cif2vasp () {
     
     CIF_FILE="$1"
@@ -460,9 +457,6 @@ cif2vasp () {
         }' > INCAR && cd ..
 }
 
-
-
-# Generate CP2K input from CIF files
 cif2cp2k () {
 
     CIF_FILE="$1"
@@ -671,8 +665,6 @@ cif2cp2k () {
 
 }
 
-
-
 # convert QE-in file to cif file
 in2cif() {
     
@@ -767,20 +759,10 @@ out_relax () {
                 printf "%d,%.10f,%s,%s,%s\n", NR, $1, $2, $3, $4
             }
         }' > "${OUT_FILE%.*}_grad.csv"
-    out_scf "$OUT_FILE"
-
+        
     ase convert -i espresso-out -o cif -n 0 "$OUT_FILE" "${OUT_FILE%.*}_start.cif"
     ase convert -i espresso-out -o cif -n -1 "$OUT_FILE" "${OUT_FILE%.*}_final.cif"
     ase convert -i espresso-out -o extxyz "$OUT_FILE" "${OUT_FILE%.*}_trj.xyz"
-}
-
-
-# Convert QE-out file to cif file
-out_cif () {
-
-    OUT_FILE="$1"
-
-    ase convert -i espresso-out -o cif -n -1 "$OUT_FILE" "${OUT_FILE%.*}.cif"
 }
 
 # generate the cif file through cell lattice and atomic coordinates from publications 
@@ -840,20 +822,8 @@ cif_gen () {
         }
     ' <<< "$(printf "%s\n" "${atom_lines[@]}")" > "$CIF_GEN_FILE"
 
-    echo "CIF file saved: $CIF_GEN_FILE (only support the VESTA cif format)"
+    echo "CIF file saved: $CIF_GEN_FILE"
 }
-
-
-
-
-
-
-
-
-
-
-
-
 
 # ==============================================================================
 # Main Execution Logic
@@ -945,20 +915,16 @@ case "$EXT" in
     out) 
         echo "Successfully loaded Quantum ESPRESSO OUT file: $READ_FILE"; 
         OUT_FILE=$READ_FILE 
-        OUT_ANALYSIS="${2:-cif}"
+        OUT_ANALYSIS="${2:-relax}"
 
         case "$OUT_ANALYSIS" in
             scf) 
-                echo "Analysising the Quantum ESPRESSO scf output files"
+                echo "Analysis the Quantum ESPRESSO scf output files"
                 out_scf $OUT_FILE
                 ;;
             relax|vc-relax) 
-                echo "Analysising the Quantum ESPRESSO relax or vc-relax output files"
+                echo "Analysis the Quantum ESPRESSO relax or vc-relax output files"
                 out_relax $OUT_FILE
-                ;;
-            cif) 
-                echo "Converting the Quantum ESPRESSO output file to CIF"
-                out_cif $OUT_FILE
                 ;;
             *) 
                 echo "Unknown analysis type: $OUT_ANALYSIS"
